@@ -1,0 +1,15 @@
+﻿.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Trained artifacts (48 MB) - archived to Zenodo, not git
+models/
+*.pt
+*.zip
+
+# Local scratch
+*.tar.gz
+FROZEN_COMMIT.txt

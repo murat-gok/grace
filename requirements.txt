@@ -1,0 +1,22 @@
+# Alternative to environment.yml if you prefer plain venv + pip.
+# Office Xeon, CPU-only. Create with:  python -m venv .venv && source .venv/bin/activate
+# Then:  pip install -r requirements.txt
+#   plus separately:  pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
+
+numpy<2.0
+scipy
+pandas
+networkx
+matplotlib
+scikit-learn
+joblib
+tqdm
+pyyaml
+pytest
+pennylane==0.38.0
+autoray==0.6.12
+pennylane-lightning==0.38.0
+torch-geometric==2.5.3
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+tensorboard

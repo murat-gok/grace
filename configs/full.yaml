@@ -1,0 +1,24 @@
+# Full protocol config for the office Xeon (overnight runs).
+# Covers all 3 graph families + weighted variants for the OOD robustness claim.
+families: [regular, erdos_renyi, watts_strogatz]
+weighted: true       # the GRACE-QAOA contribution lives on weighted/OOD graphs
+n_nodes: 16          # comfortable on CPU; raise toward 20-22 carefully
+n_instances: 10
+n_runs: 30           # >=30 runs => valid Wilcoxon/Friedman
+qaoa_p: 3            # sweep p=1..5 across separate config files
+
+# --- fair-budget protocol (every method capped at the same #evaluations) ---
+quantum_budget: 1500   # max quantum evaluations per method per instance
+target_frac: 0.95      # "reached target" = >=95% of optimal cut
+
+# --- strong baseline knobs ---
+cobyla_maxiter: 150
+spsa_iters: 200
+interp_maxiter: 60
+fourier_maxiter: 120
+transfer_maxiter: 60
+
+grace_rounds: 6
+escape: cpo
+n_jobs: 8            # = physical cores on Xeon E5-1660 v3
+out_dir: results

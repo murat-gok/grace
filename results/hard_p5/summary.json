@@ -1,0 +1,144 @@
+{
+  "config": {
+    "families": [
+      "regular",
+      "erdos_renyi",
+      "watts_strogatz"
+    ],
+    "weighted": true,
+    "n_nodes": 14,
+    "n_instances": 8,
+    "n_runs": 30,
+    "qaoa_p": 5,
+    "quantum_budget": 3000,
+    "target_frac": 0.95,
+    "cobyla_maxiter": 250,
+    "spsa_iters": 400,
+    "interp_maxiter": 80,
+    "fourier_maxiter": 200,
+    "transfer_maxiter": 100,
+    "grace_rounds": 10,
+    "escape": "cpo",
+    "stall_eps": 0.001,
+    "stall_patience": 2,
+    "n_jobs": 8,
+    "out_dir": "results"
+  },
+  "run_name": "hard_p5",
+  "n_samples": 720,
+  "methods": [
+    "random",
+    "cobyla",
+    "spsa",
+    "interp",
+    "fourier",
+    "transfer",
+    "gnn_only",
+    "grace"
+  ],
+  "mean_approx_ratio": {
+    "random": 0.6025220836178848,
+    "cobyla": 0.695671313852016,
+    "spsa": 0.7028915976901818,
+    "interp": 0.8296400188964405,
+    "fourier": 0.8229265129090844,
+    "transfer": 0.6722904194031529,
+    "gnn_only": 0.6033066155660408,
+    "grace": 0.7375762061071149
+  },
+  "std_approx_ratio": {
+    "random": 0.04878591097790663,
+    "cobyla": 0.06112128592901332,
+    "spsa": 0.07890189055457063,
+    "interp": 0.09319064371996622,
+    "fourier": 0.09380461240756392,
+    "transfer": 0.04862761845330753,
+    "gnn_only": 0.0483521721896879,
+    "grace": 0.07961834984817628
+  },
+  "mean_evals_used": {
+    "random": 1.0,
+    "cobyla": 250.0,
+    "spsa": 801.0,
+    "interp": 436.9527777777778,
+    "fourier": 201.0,
+    "transfer": 101.0,
+    "gnn_only": 1.0,
+    "grace": 784.2555555555556
+  },
+  "frac_reached_target": {
+    "random": 0.0,
+    "cobyla": 0.0,
+    "spsa": 0.0,
+    "interp": 0.02361111111111111,
+    "fourier": 0.002777777777777778,
+    "transfer": 0.0,
+    "gnn_only": 0.0,
+    "grace": 0.0
+  },
+  "median_evals_to_target": {
+    "random": null,
+    "cobyla": null,
+    "spsa": null,
+    "interp": 439.0,
+    "fourier": 98.0,
+    "transfer": null,
+    "gnn_only": null,
+    "grace": null
+  },
+  "average_ranks": {
+    "random": 7.4847222222222225,
+    "cobyla": 4.019444444444445,
+    "spsa": 4.326388888888889,
+    "interp": 2.0305555555555554,
+    "fourier": 2.2041666666666666,
+    "transfer": 4.8180555555555555,
+    "gnn_only": 7.4875,
+    "grace": 3.629166666666667
+  },
+  "friedman": {
+    "statistic": 3638.7976851851854,
+    "p_value": 0.0
+  },
+  "wilcoxon_grace_vs": {
+    "random": {
+      "statistic": 0.0,
+      "p_value": 1.5628191185518281e-119
+    },
+    "cobyla": {
+      "statistic": 71210.0,
+      "p_value": 9.506386180635319e-26
+    },
+    "spsa": {
+      "statistic": 72628.0,
+      "p_value": 1.3541898526738276e-24
+    },
+    "interp": {
+      "statistic": 33908.0,
+      "p_value": 4.2722001261144505e-66
+    },
+    "fourier": {
+      "statistic": 40062.0,
+      "p_value": 4.132327959908998e-58
+    },
+    "transfer": {
+      "statistic": 38564.0,
+      "p_value": 5.257504227344741e-60
+    },
+    "gnn_only": {
+      "statistic": 56.0,
+      "p_value": 1.9739614833272912e-119
+    }
+  },
+  "holm_vs_grace": {
+    "random": 1.0939733829862798e-118,
+    "gnn_only": 1.1843768899963748e-118,
+    "interp": 2.1361000630572253e-65,
+    "transfer": 2.1030016909378966e-59,
+    "fourier": 1.2396983879726995e-57,
+    "cobyla": 1.9012772361270637e-25,
+    "spsa": 1.3541898526738276e-24,
+    "grace": 1.0
+  },
+  "runtime_sec": 0.2
+}

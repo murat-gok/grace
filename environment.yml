@@ -1,0 +1,27 @@
+name: grace-qaoa
+# Office Xeon E5-1660 v3 (8C/16T) + 32GB RAM, CPU-only.
+# Quadro K2200 is ignored (too old for modern CUDA/cuQuantum).
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11           # 3.11 is the safest sweet spot for PennyLane + PyG wheels
+  - pip
+  - numpy<2.0             # PennyLane-Lightning is happiest on numpy 1.x
+  - scipy
+  - pandas
+  - networkx
+  - matplotlib
+  - scikit-learn
+  - joblib                # multi-run CPU parallelism
+  - tqdm
+  - pyyaml
+  - pytest
+  - pip:
+      - pennylane==0.38.0
+      - autoray==0.6.12               # MUST pin: newer autoray breaks PL 0.38
+      - pennylane-lightning==0.38.0   # C++ CPU state-vector simulator (multi-core)
+      - torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
+      - torch-geometric==2.5.3
+      - gymnasium==0.29.1
+      - stable-baselines3==2.3.2      # TD3/SAC implementations
+      - tensorboard

@@ -1,0 +1,12 @@
+# Quick smoke config: small + fast, verifies the full pipeline on a laptop/CI.
+families: [regular, erdos_renyi]
+weighted: false
+n_nodes: 8
+n_instances: 3
+n_runs: 5            # bump to >=30 for the real protocol
+qaoa_p: 1
+cobyla_maxiter: 50
+grace_rounds: 4
+escape: cpo          # 'cpo' or 'de'  (ablation c)
+n_jobs: 4            # <= physical cores; office Xeon has 8
+out_dir: results

@@ -1,0 +1,48 @@
+{
+  "config": {
+    "families": [
+      "regular",
+      "erdos_renyi"
+    ],
+    "weighted": false,
+    "n_nodes": 8,
+    "n_instances": 3,
+    "n_runs": 5,
+    "qaoa_p": 1,
+    "cobyla_maxiter": 50,
+    "grace_rounds": 4,
+    "escape": "cpo",
+    "n_jobs": 4,
+    "out_dir": "results"
+  },
+  "n_samples": 30,
+  "mean_approx_ratio": {
+    "random": 0.596449544233338,
+    "cobyla": 0.7816421909549132,
+    "grace": 0.7126532420215193
+  },
+  "std_approx_ratio": {
+    "random": 0.0913144436140936,
+    "cobyla": 0.07346137895906772,
+    "grace": 0.10391895585673529
+  },
+  "average_ranks": {
+    "random": 3.0,
+    "cobyla": 1.0,
+    "grace": 2.0
+  },
+  "friedman": {
+    "statistic": 60.0,
+    "p_value": 9.357622968840163e-14
+  },
+  "wilcoxon_grace_vs_cobyla": {
+    "statistic": 0.0,
+    "p_value": 1.862645149230957e-09
+  },
+  "holm_vs_grace": {
+    "random": 3.725290298461914e-09,
+    "cobyla": 1.862645149230957e-09,
+    "grace": 1.0
+  },
+  "runtime_sec": 9.5
+}
