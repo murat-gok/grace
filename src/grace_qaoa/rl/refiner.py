@@ -5,11 +5,13 @@ The GRACE controller calls rl_step_fn to perform one RL-refinement *round*
 `steps_per_round` greedy steps starting from the given params, using the same
 observation features the policy was trained on, and returns the refined params.
 
-IMPORTANT (fair-budget): the observation uses only ZERO-extra-cost landscape
-signals (normalized cut, recent improvement/momentum, stall fraction). It does
-NOT compute a finite-difference gradient, so each refinement step costs exactly
-ONE quantum evaluation (the cut itself) instead of 1 + 2p. This keeps GRACE's
-budget accounting honest and competitive at high p.
+IMPORTANT (fair-budget): the observation uses only landscape signals
+(normalized cut, recent improvement/momentum, stall fraction), so no
+finite-difference gradient is computed. Each refinement STEP still costs one
+quantum evaluation (the cut itself). A full round therefore costs
+`1 + steps_per_round` evaluations, exposed via `self.last_call_evals` so the
+controller can add it to the shared budget counter. (Earlier versions did not
+expose this, and the round's evaluations were invisible to the counter.)
 """
 from __future__ import annotations
 
@@ -29,6 +31,9 @@ class RLRefiner:
         self.step_scale = step_scale
         self.steps_per_round = steps_per_round
         self.horizon = horizon
+        # Quantum evaluations spent in the most recent __call__, so the
+        # controller can charge them to the shared fair-budget counter.
+        self.last_call_evals = 0
 
     def _obs(self, params, cut, last_cut, best_cut, stall_steps):
         # Scale by running-best (never the true optimum) -- matches the env and
@@ -42,8 +47,9 @@ class RLRefiner:
     def __call__(self, params: np.ndarray) -> np.ndarray:
         """One refinement round: greedy-roll the policy from `params`.
 
-        Cost: 1 quantum eval per step (plus 1 for the initial cut) -- no
-        gradient evaluations.
+        Cost: 1 quantum eval per step plus 1 for the initial cut, i.e.
+        `1 + steps_per_round` evaluations, recorded in `self.last_call_evals`.
+        No gradient evaluations are performed.
         """
         cur = np.asarray(params, dtype=np.float32).reshape(-1)
         cut = self.qaoa.expected_cut(cur)        # 1 eval
@@ -62,4 +68,6 @@ class RLRefiner:
                 stall = 0
             else:
                 stall += 1
+        # initial cut (1) + one cut per step
+        self.last_call_evals = 1 + self.steps_per_round
         return best

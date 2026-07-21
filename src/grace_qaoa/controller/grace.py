@@ -1,9 +1,20 @@
 """The GRACE-QAOA closed-loop controller.
 
-Decides when to switch among three modes:
-  1. GNN-predict      -> initial warm-start (once, at the start)
-  2. RL-refine        -> online gradient-free policy steps
-  3. metaheuristic-escape -> triggered when RL stalls (improvement < eps for T steps)
+Two mandatory stages, plus an optional refine stage selected by `refiner`:
+  1. GNN-predict          -> initial warm-start (once, at the start; supplied
+                             by the caller as init_params)
+  2. refine (optional)    -> refiner="none" (default): no refinement, the loop
+                             is warm-start + escape only, which is the method
+                             described in the paper;
+                             refiner="hill": stochastic coordinate hill-climb;
+                             refiner="rl": injected RL policy (rl_step_fn).
+  3. metaheuristic-escape -> triggered when the running-best stalls
+                             (no improvement > eps for `stall_patience` rounds).
+
+Budget accounting: every quantum evaluation is charged to a single counter,
+`self.n_quantum_evals`, including those spent inside the RL refiner (added via
+its `last_call_evals`). This keeps the per-evaluation budget honest across all
+refiner modes.
 
 This threshold-based controller is the simple, defensible starting point. The
 ablation 'learned controller' can replace `_should_escape` with a small policy
@@ -51,13 +62,32 @@ class GraceController:
         return self._rounds_since_improve >= self.stall_patience
 
     def run(self, init_params: np.ndarray, rl_step_fn=None,
-            rl_steps_per_round: int = 30) -> dict:
+            rl_steps_per_round: int = 30, refiner: str = "none") -> dict:
         """Run the closed loop.
 
-        rl_step_fn(params) -> refined_params is an injected callable so the
-        controller does not hard-depend on stable-baselines3 (keeps tests light).
-        If None, a simple coordinate hill-climb stands in for the RL refiner.
+        Parameters
+        ----------
+        init_params : np.ndarray
+            Warm-start angles (e.g. from the GNN).
+        rl_step_fn : callable or None
+            rl_step_fn(params) -> refined_params. Injected so the controller
+            does not hard-depend on stable-baselines3. Only used when
+            refiner="rl". If it exposes `last_call_evals`, those evaluations are
+            added to the shared budget counter.
+        rl_steps_per_round : int
+            Number of hill-climb steps per round when refiner="hill".
+        refiner : {"none", "hill", "rl"}
+            "none" (default): warm-start + escape only -- the two-stage method
+                described in the paper. `params` is unchanged before the escape
+                decision, so a stall is detected after `stall_patience` rounds
+                and the escape fires.
+            "hill": stochastic coordinate hill-climb stand-in (its evaluations
+                are already charged through self._eval).
+            "rl": use rl_step_fn; its round cost (last_call_evals) is charged to
+                the budget counter.
         """
+        if refiner not in ("none", "hill", "rl"):
+            raise ValueError(f"unknown refiner mode: {refiner!r}")
         params = np.asarray(init_params, dtype=float).reshape(-1)
         best_params = params.copy()
         best_cut = self._eval(params)
@@ -65,11 +95,14 @@ class GraceController:
         improve_eps = self.stall_eps if self.stall_eps > 0 else 1e-3
 
         for rnd in range(self.max_rounds):
-            # --- RL-refine phase ---
-            if rl_step_fn is not None:
+            # --- refine phase (optional) ---
+            if refiner == "rl" and rl_step_fn is not None:
                 params = rl_step_fn(params).reshape(-1)
-            else:
+                # Charge the refiner's quantum evaluations to the shared counter.
+                self.n_quantum_evals += getattr(rl_step_fn, "last_call_evals", 0)
+            elif refiner == "hill":
                 params = self._hill_climb(params, rl_steps_per_round)
+            # refiner == "none": no refinement; params unchanged this round.
             cut = self._eval(params)
             cut_trace.append(cut)
             improved = cut > best_cut + improve_eps

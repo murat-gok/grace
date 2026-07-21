@@ -169,7 +169,7 @@ def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
     else:
         init = np.random.default_rng(seed).uniform(0, np.pi, 2 * p)
     rl_step_fn = None
-    if rl_model is not None:
+    if cfg.get("refiner", "none") == "rl" and rl_model is not None:
         rl_step_fn = RLRefiner(rl_model, cq, optimal_cut=opt,
                                steps_per_round=cfg.get("rl_steps_per_round", 30))
     grace = GraceController(cq, escape=cfg["escape"],
@@ -177,7 +177,8 @@ def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
                             stall_patience=cfg.get("stall_patience", 2),
                             max_rounds=cfg["grace_rounds"], seed=seed)
     try:
-        gres = grace.run(init, rl_step_fn=rl_step_fn)
+        gres = grace.run(init, rl_step_fn=rl_step_fn,
+                         refiner=cfg.get("refiner", "none"))
     except BudgetExhausted:
         gres = {"best_cut": cq.best_cut_so_far, "n_quantum_evals": cq.n_evals}
     record("grace", gres, cq)
@@ -199,10 +200,13 @@ def main():
 
     t0 = time.time()
     rl_model = _load_rl_model(cfg)
+    refiner_mode = cfg.get("refiner", "none")
     if rl_model is not None:
         print(f"Loaded RL refiner: {cfg.get('rl_model')} ({cfg.get('rl_algo','td3')})")
-    else:
-        print("No rl_model in config -> GRACE uses hill-climb stand-in refiner.")
+    print(f"GRACE refiner mode: {refiner_mode!r} "
+          f"(none = warm-start + escape only, the paper's method)")
+    if refiner_mode == "rl" and rl_model is None:
+        print("  WARNING: refiner='rl' but no rl_model loaded -> no refinement will run.")
 
     gnn_model = None
     if cfg.get("gnn_model"):
@@ -216,6 +220,7 @@ def main():
     out_dir = Path(cfg.get("out_dir", "results"))
     run_name = args.run_name or f"run_{Path(args.config).stem}"
     store = CheckpointStore(out_dir / run_name)
+    store.write_provenance(cfg=cfg, extra={"run_name": run_name})
     if store.n_completed:
         print(f"Resuming '{run_name}': {store.n_completed} jobs already done, "
               f"skipping those.")
@@ -237,20 +242,47 @@ def main():
                if not store.is_done(job_id(fam, gi, run))]
     print(f"Total jobs: {len(all_jobs)} | pending: {len(pending)}")
 
-    # --- run pending jobs in batches; checkpoint after every batch ---
-    batch_size = args.batch_size or (4 * cfg["n_jobs"])
-    for start in range(0, len(pending), batch_size):
-        batch = pending[start:start + batch_size]
-        out = Parallel(n_jobs=cfg["n_jobs"], verbose=5)(
-            delayed(run_one_instance)(g, cfg, seed=1000 * gi + run,
-                                      rl_model=rl_model, gnn_model=gnn_model)
-            for (fam, gi, run, g) in batch)
-        for (fam, gi, run, g), res in zip(batch, out):
+    # --- run pending jobs, checkpointing EACH result the moment it is ready ---
+    # We consume joblib's results as a generator so a completed job is flushed +
+    # fsync'd immediately, instead of waiting for a whole batch. A power cut then
+    # loses at most the jobs currently in flight (<= n_jobs), never a full batch.
+    # return_as="generator" needs joblib>=1.3; fall back to small batches if the
+    # installed joblib is older, so the script still runs (just coarser-grained).
+    import joblib as _joblib
+    _supports_gen = tuple(int(x) for x in _joblib.__version__.split(".")[:2]) >= (1, 3)
+
+    def _stream_results():
+        if _supports_gen:
+            gen = Parallel(n_jobs=cfg["n_jobs"], verbose=5,
+                           return_as="generator")(
+                delayed(run_one_instance)(g, cfg, seed=1000 * gi + run,
+                                          rl_model=rl_model, gnn_model=gnn_model)
+                for (fam, gi, run, g) in pending)
+            for job, res in zip(pending, gen):
+                yield job, res
+        else:
+            # Older joblib: process in small batches (checkpoint per batch).
+            bs = args.batch_size or cfg["n_jobs"]
+            for s in range(0, len(pending), bs):
+                chunk = pending[s:s + bs]
+                out = Parallel(n_jobs=cfg["n_jobs"], verbose=5)(
+                    delayed(run_one_instance)(g, cfg, seed=1000 * gi + run,
+                                              rl_model=rl_model, gnn_model=gnn_model)
+                    for (fam, gi, run, g) in chunk)
+                for job, res in zip(chunk, out):
+                    yield job, res
+
+    if pending:
+        last_report = time.time()
+        for (fam, gi, run, g), res in _stream_results():
             res.update({"family": fam, "instance": gi, "run": run})
-            store.append(job_id(fam, gi, run), res)   # flushed + fsync'd
-        done = store.n_completed
-        print(f"  checkpoint: {done}/{len(all_jobs)} jobs saved "
-              f"({round(time.time()-t0)}s elapsed)")
+            store.append(job_id(fam, gi, run), res)   # flushed + fsync'd per job
+            if time.time() - last_report > 10:
+                print(f"  checkpoint: {store.n_completed}/{len(all_jobs)} jobs "
+                      f"saved ({round(time.time()-t0)}s elapsed)")
+                last_report = time.time()
+    print(f"  checkpoint: {store.n_completed}/{len(all_jobs)} jobs saved "
+          f"({round(time.time()-t0)}s elapsed)")
 
     # --- aggregate from the checkpoint file (single source of truth) ---
     all_rows = store.load_all_records()

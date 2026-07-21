@@ -36,6 +36,18 @@ from grace_qaoa.quantum.qaoa import QAOAMaxCut, brute_force_maxcut
 from grace_qaoa.gnn.warm_start import GNNWarmStart, graph_to_data
 
 
+def _atomic_torch_save(obj, path: Path) -> None:
+    """Save a torch checkpoint atomically (temp file + fsync + replace), so a
+    power cut can never leave a half-written .pt that fails to load on resume.
+    """
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    with open(tmp, "rb") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def compute_targets(graphs, p, multistart=8, maxiter=120, seed=0):
     """Find good (gamma, beta) for each graph via multi-start COBYLA."""
     rng = np.random.default_rng(seed)
@@ -58,17 +70,34 @@ def compute_targets(graphs, p, multistart=8, maxiter=120, seed=0):
     return targets
 
 
-def _finetune_on_cut(model, graphs, targets, p, epochs, lr=3e-4):
+def _finetune_on_cut(model, graphs, targets, p, epochs, lr=3e-4,
+                     ckpt_path=None, ckpt_every=25):
     """Fine-tune the GNN to maximize the expected cut of its predicted angles.
 
     Uses PennyLane's torch interface so gradients flow from the QAOA expectation
     back into the GNN. This directly optimizes what we care about (cut), fixing
     the well-known weakness of pure angle-MSE (good angles != unique angles).
+
+    Resumable: if `ckpt_path` exists from a crashed run, training resumes from
+    the saved epoch instead of restarting.
     """
     import pennylane as qml
     from grace_qaoa.gnn.warm_start import graph_to_data
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+
+    start_epoch = 0
+    if ckpt_path is not None and Path(ckpt_path).exists():
+        try:
+            ck = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            start_epoch = ck.get("epoch", 0)
+            print(f"  Resuming fine-tune from epoch {start_epoch}/{epochs}")
+        except Exception as e:
+            print(f"  Could not load fine-tune checkpoint ({e}); starting fresh.")
+            start_epoch = 0
+
     # Build a torch-interfaced QAOA expectation per graph (cached).
     qnodes = []
     for g in graphs:
@@ -92,7 +121,7 @@ def _finetune_on_cut(model, graphs, targets, p, epochs, lr=3e-4):
         qnodes.append((qnode, qaoa._max_cut_offset))
 
     model.train()
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         total_cut = 0.0
         for g, (qnode, offset) in zip(graphs, qnodes):
             opt.zero_grad()
@@ -107,6 +136,12 @@ def _finetune_on_cut(model, graphs, targets, p, epochs, lr=3e-4):
         if (epoch + 1) % 5 == 0:
             print(f"  [cut] epoch {epoch+1}/{epochs}  "
                   f"mean_cut={total_cut/len(graphs):.3f}")
+        if ckpt_path is not None and (
+                (epoch + 1) % ckpt_every == 0 or (epoch + 1) == epochs):
+            _atomic_torch_save(
+                {"model": model.state_dict(), "opt": opt.state_dict(),
+                 "epoch": epoch + 1, "phase": "finetune"},
+                ckpt_path)
 
 
 def main():
@@ -117,6 +152,9 @@ def main():
     ap.add_argument("--finetune-epochs", type=int, default=30,
                     help="Cut-based fine-tuning epochs after MSE phase (0=skip).")
     ap.add_argument("--pool-size", type=int, default=80)
+    ap.add_argument("--ckpt-every", type=int, default=25,
+                    help="Save a resumable training checkpoint every N epochs "
+                         "(power-outage resilience).")
     ap.add_argument("--out", default="models")
     ap.add_argument("--cache", default=None,
                     help="Path to cache targets; reused if present (crash-safe).")
@@ -162,8 +200,27 @@ def main():
     model = GNNWarmStart(p=p, conv_type=args.conv)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = torch.nn.MSELoss()
+
+    # Resumable epoch checkpoint: if a previous run crashed mid-training, pick up
+    # from the last saved epoch instead of restarting from scratch.
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = out_dir / f"train_ckpt_p{p}_{args.conv}.pt"
+    start_epoch = 0
+    if ckpt_path.exists():
+        try:
+            ck = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            start_epoch = ck.get("epoch", 0)
+            print(f"Resuming MSE training from epoch {start_epoch}/{args.epochs} "
+                  f"(checkpoint: {ckpt_path})")
+        except Exception as e:
+            print(f"Could not load train checkpoint ({e}); starting fresh.")
+            start_epoch = 0
+
     model.train()
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         total = 0.0
         for batch in loader:
             opt.zero_grad()
@@ -175,6 +232,13 @@ def main():
         if (epoch + 1) % 50 == 0:
             print(f"  [mse] epoch {epoch+1}/{args.epochs}  "
                   f"MSE={total/len(data_list):.4f}")
+        # Checkpoint every `ckpt_every` epochs (and on the final epoch).
+        if (epoch + 1) % args.ckpt_every == 0 or (epoch + 1) == args.epochs:
+            _atomic_torch_save(
+                {"model": model.state_dict(), "opt": opt.state_dict(),
+                 "epoch": epoch + 1, "phase": "mse", "p": p,
+                 "conv_type": args.conv},
+                ckpt_path)
 
     # --- evaluate warm-start quality before fine-tuning ---
     def warmstart_quality():
@@ -198,19 +262,26 @@ def main():
     # MSE to optimal angles is a proxy; what we actually want is high expected
     # cut from the predicted angles. We fine-tune directly on a differentiable
     # surrogate: maximize predicted-angle cut via a PennyLane torch interface.
+    model_path = out_dir / f"gnn_warmstart_p{p}_{args.conv}.pt"
     if args.finetune_epochs > 0:
         print(f"Fine-tuning {args.finetune_epochs} epochs on cut objective...")
-        _finetune_on_cut(model, graphs, targets, p, args.finetune_epochs)
+        _finetune_on_cut(model, graphs, targets, p, args.finetune_epochs,
+                         ckpt_path=out_dir / f"ft_ckpt_p{p}_{args.conv}.pt",
+                         ckpt_every=args.ckpt_every)
         q2 = warmstart_quality()
         if q2 is not None:
             print(f"Warm-start quality after fine-tune: mean approx = {q2:.4f}")
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / f"gnn_warmstart_p{p}_{args.conv}.pt"
-    torch.save({"state_dict": model.state_dict(), "p": p,
-                "conv_type": args.conv}, model_path)
+    _atomic_torch_save({"state_dict": model.state_dict(), "p": p,
+                        "conv_type": args.conv}, model_path)
     print(f"Saved GNN warm-start -> {model_path}")
+    # Training finished cleanly: remove the resume checkpoints so a later,
+    # intentional rerun starts fresh rather than resuming a completed run.
+    for stale in (ckpt_path, out_dir / f"ft_ckpt_p{p}_{args.conv}.pt"):
+        try:
+            stale.unlink()
+        except FileNotFoundError:
+            pass
 
 
 if __name__ == "__main__":
