@@ -27,9 +27,9 @@
     "rl_algo": "td3",
     "rl_steps_per_round": 30,
     "gnn_model": "models/gnn_warmstart_p5_gcn.pt",
-    "refiner": "hill"
+    "refiner": "none"
   },
-  "run_name": "cmp_hill",
+  "run_name": "cmp_none",
   "n_samples": 720,
   "methods": [
     "random",
@@ -145,5 +145,5 @@
     "interp": 3.0822504959641607e-48,
     "grace": 1.0
   },
-  "runtime_sec": 14517.8
+  "runtime_sec": 8.7
 }
