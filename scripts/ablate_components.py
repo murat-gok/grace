@@ -73,7 +73,8 @@ def run_config(g, cfg, gnn, rl_model, which, seed):
                            stall_patience=cfg.get("stall_patience", 2),
                            max_rounds=cfg["grace_rounds"], seed=seed)
     try:
-        return ctrl.run(init, rl_step_fn=rl_step)["best_cut"] / opt
+        return ctrl.run(init, rl_step_fn=rl_step,
+                        refiner=("rl" if use_rl else "none"))["best_cut"] / opt
     except BudgetExhausted:
         return cq.best_cut_so_far / opt
 
