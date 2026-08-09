@@ -31,12 +31,10 @@ from grace_qaoa.quantum.qaoa import QAOAMaxCut
 class GraceController:
     def __init__(self, qaoa: QAOAMaxCut, escape: str = "cpo",
                  stall_eps: float = 1e-3, stall_patience: int = 3,
-                 max_rounds: int = 6, seed: int = 0, escape_evals: int = 180,
-                 escape_kwargs: dict | None = None):
+                 max_rounds: int = 6, seed: int = 0, escape_evals: int = 180):
         self.qaoa = qaoa
         self.escape_name = escape
         self.escape_evals = escape_evals   # identical budget for every operator
-        self.escape_kwargs = escape_kwargs or {}   # tuned operator coefficients
         self.stall_eps = stall_eps
         self.stall_patience = stall_patience
         self.max_rounds = max_rounds
@@ -119,7 +117,6 @@ class GraceController:
                     x0=best_params.copy(),
                     rng=self.rng,
                     max_evals=self.escape_evals,
-                    **self.escape_kwargs,
                 )
                 params = np.asarray(escaped, dtype=float).reshape(-1)
                 cut = self._eval(params)

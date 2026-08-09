@@ -144,8 +144,7 @@ class _BudgetReached(Exception):
     pass
 
 
-def run_escape_fair(name, cost_fn, x0, rng, max_evals, bounds=(0.0, np.pi),
-                    **op_kwargs):
+def run_escape_fair(name, cost_fn, x0, rng, max_evals, bounds=(0.0, np.pi)):
     """Run any registered escape operator under an IDENTICAL evaluation budget.
 
     Wraps cost_fn with a hard cap so every operator gets exactly `max_evals`
@@ -169,7 +168,7 @@ def run_escape_fair(name, cost_fn, x0, rng, max_evals, bounds=(0.0, np.pi),
 
     try:
         out = op(capped, np.asarray(x0, dtype=float).copy(), bounds=bounds,
-                 rng=rng, **op_kwargs)
+                 rng=rng)
         # operator finished under budget; prefer its returned point if better
         try:
             fo = cost_fn(out)

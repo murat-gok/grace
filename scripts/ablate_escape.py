@@ -53,13 +53,20 @@ ESCAPES = ["none", "random", "de", "ga", "pso", "aco", "woa", "gwo",
 ALL_KNOWN = ESCAPES + ["aco_ls", "aco_cpo_portfolio", "aco_cpo_cascade"]
 
 
-def run_grace(g, cfg, gnn, escape, seed):
+def run_grace(g, cfg, gnn, escape, seed, tuned=None):
     """One GRACE run with the given escape operator, refiner disabled.
 
     refiner="none" is the two-stage method the paper describes: warm-start, then
     escape when the loop stalls. With no refiner the params are unchanged each
     round, so the escape fires on a fixed schedule and every operator receives
     the identical evaluation budget -- which is what makes this ablation fair.
+
+    `tuned` (optional) maps operator -> coefficient dict from tune_operators.py.
+    The dict is forwarded through the controller's escape_kwargs channel to the
+    operator, so a tuned ablation compares each operator at its validation-best
+    configuration rather than its library default. Tuning changes only the
+    behavioural coefficients, never pop_size/iters, so the per-escape budget --
+    and thus the fairness of the comparison -- is untouched.
     """
     p = cfg["qaoa_p"]
     opt = brute_force_maxcut(g)
@@ -68,9 +75,11 @@ def run_grace(g, cfg, gnn, escape, seed):
     # 'none' = escape disabled (stall_eps < 0 never triggers)
     stall_eps = -1.0 if escape == "none" else cfg.get("stall_eps", 1e-3)
     esc_name = "cpo" if escape == "none" else escape  # any valid key; never fires
+    esc_kwargs = (tuned or {}).get(escape, {}) if escape != "none" else {}
     ctrl = GraceController(cq, escape=esc_name, stall_eps=stall_eps,
                            stall_patience=cfg.get("stall_patience", 2),
-                           max_rounds=cfg["grace_rounds"], seed=seed)
+                           max_rounds=cfg["grace_rounds"], seed=seed,
+                           escape_kwargs=esc_kwargs)
     try:
         res = ctrl.run(init, refiner="none")
         return res["best_cut"] / opt
@@ -89,6 +98,10 @@ def main():
     ap.add_argument("--only", nargs="+", default=None,
                     help="Restrict to these operators (e.g. --only none aco aco_ls). "
                          "Default: run all.")
+    ap.add_argument("--tuned", default=None,
+                    help="Path to tuned_operators.json from tune_operators.py. "
+                         "Each operator then runs at its tuned coefficients "
+                         "instead of library defaults (budget unchanged).")
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config))
 
@@ -103,6 +116,16 @@ def main():
 
     gnn = load_gnn_warmstart(args.gnn_model)
 
+    tuned = None
+    if args.tuned:
+        import json
+        with open(args.tuned, encoding="utf-8") as f:
+            tuned = json.load(f).get("tuned", {})
+        print(f"Loaded tuned coefficients for: {sorted(tuned)}")
+        for e in ESCAPES:
+            if e != "none" and e in tuned and tuned[e]:
+                print(f"  {e}: {tuned[e]}")
+
     graphs = []
     per_fam = max(1, args.n_instances // len(cfg["families"]))
     for fam in cfg["families"]:
@@ -113,7 +136,9 @@ def main():
     # --- crash-safe: checkpoint every (instance, escape) result to disk ---
     store = CheckpointStore(Path(cfg.get("out_dir", "results")) / args.run_name)
     store.write_provenance(cfg=cfg, extra={"script": "ablate_escape",
-                                           "operators": ESCAPES})
+                                           "operators": ESCAPES,
+                                           "tuned": bool(args.tuned),
+                                           "tuned_path": args.tuned})
     if store.n_completed:
         print(f"Resuming '{args.run_name}': {store.n_completed} cells done.")
 
@@ -123,7 +148,7 @@ def main():
             cell_id = f"inst{gi}|{e}"
             if store.is_done(cell_id):
                 continue
-            ars = [run_grace(g, cfg, gnn, e, seed=run)
+            ars = [run_grace(g, cfg, gnn, e, seed=run, tuned=tuned)
                    for run in range(args.n_runs)]
             store.append(cell_id, {"instance": gi, "escape": e,
                                    "mean_ar": float(np.mean(ars))})
