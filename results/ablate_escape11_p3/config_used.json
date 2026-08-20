@@ -1,0 +1,86 @@
+{
+  "created": "2026-08-11 08:34:03",
+  "argv": [
+    "scripts\\ablate_escape.py",
+    "--config",
+    "configs\\hard2gnn_p3.yaml",
+    "--gnn-model",
+    "models\\gnn_warmstart_p3_gcn.pt",
+    "--tuned",
+    "models\\tuned_operators.json",
+    "--only",
+    "none",
+    "random",
+    "de",
+    "ga",
+    "pso",
+    "aco",
+    "woa",
+    "gwo",
+    "hho",
+    "cmaes",
+    "cpo",
+    "--n-instances",
+    "30",
+    "--n-runs",
+    "10",
+    "--run-name",
+    "ablate_escape11_p3"
+  ],
+  "git": "872acaaa8533b0231c55b12739b606a485b4a03b",
+  "cfg": {
+    "families": [
+      "regular",
+      "erdos_renyi",
+      "watts_strogatz"
+    ],
+    "weighted": true,
+    "n_nodes": 14,
+    "n_instances": 8,
+    "n_runs": 30,
+    "qaoa_p": 3,
+    "quantum_budget": 3000,
+    "target_frac": 0.95,
+    "cobyla_maxiter": 250,
+    "spsa_iters": 400,
+    "interp_maxiter": 80,
+    "fourier_maxiter": 200,
+    "transfer_maxiter": 100,
+    "grace_rounds": 10,
+    "escape": "cpo",
+    "stall_eps": 0.001,
+    "stall_patience": 2,
+    "n_jobs": 8,
+    "out_dir": "results",
+    "rl_model": "models/rl_refiner_td3",
+    "rl_algo": "td3",
+    "rl_steps_per_round": 30,
+    "gnn_model": "models/gnn_warmstart_p5_gcn.pt"
+  },
+  "script": "ablate_escape",
+  "operators": [
+    "none",
+    "random",
+    "de",
+    "ga",
+    "pso",
+    "aco",
+    "woa",
+    "gwo",
+    "hho",
+    "cmaes",
+    "cpo"
+  ],
+  "tuned": true,
+  "tuned_path": "models\\tuned_operators.json",
+  "resumes": [
+    {
+      "at": "2026-08-15 00:58:12",
+      "git": "872acaaa8533b0231c55b12739b606a485b4a03b"
+    },
+    {
+      "at": "2026-08-19 22:18:00",
+      "git": "872acaaa8533b0231c55b12739b606a485b4a03b"
+    }
+  ]
+}
