@@ -1,0 +1,73 @@
+{
+  "created": "2026-08-22 14:02:29",
+  "argv": [
+    "scripts\\robustness.py",
+    "--mode",
+    "size",
+    "--config",
+    "configs\\hard2gnn.yaml",
+    "--escape",
+    "aco",
+    "--tuned",
+    "models\\tuned_operators.json",
+    "--sizes",
+    "10",
+    "12",
+    "14",
+    "16",
+    "18",
+    "--n-instances",
+    "20",
+    "--n-runs",
+    "20",
+    "--run-name",
+    "robust_size_aco_v2"
+  ],
+  "git": "af17a5975eac69ac5c39f26160d3bb684fc1317b",
+  "cfg": {
+    "families": [
+      "regular",
+      "erdos_renyi",
+      "watts_strogatz"
+    ],
+    "weighted": true,
+    "n_nodes": 14,
+    "n_instances": 8,
+    "n_runs": 30,
+    "qaoa_p": 5,
+    "quantum_budget": 3000,
+    "target_frac": 0.95,
+    "cobyla_maxiter": 250,
+    "spsa_iters": 400,
+    "interp_maxiter": 80,
+    "fourier_maxiter": 200,
+    "transfer_maxiter": 100,
+    "grace_rounds": 10,
+    "escape": "cpo",
+    "stall_eps": 0.001,
+    "stall_patience": 2,
+    "n_jobs": 8,
+    "out_dir": "results",
+    "rl_model": "models/rl_refiner_td3",
+    "rl_algo": "td3",
+    "rl_steps_per_round": 30,
+    "gnn_model": "models/gnn_warmstart_p5_gcn.pt"
+  },
+  "script": "robustness",
+  "mode": "size",
+  "escape": "aco",
+  "escape_kwargs": {
+    "q": 0.1,
+    "xi": 0.85
+  },
+  "resumes": [
+    {
+      "at": "2026-08-23 21:07:54",
+      "git": "af17a5975eac69ac5c39f26160d3bb684fc1317b"
+    },
+    {
+      "at": "2026-09-01 16:54:24",
+      "git": "af17a5975eac69ac5c39f26160d3bb684fc1317b"
+    }
+  ]
+}

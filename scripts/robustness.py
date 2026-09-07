@@ -41,7 +41,6 @@ from grace_qaoa.quantum.qaoa import QAOAMaxCut, brute_force_maxcut
 from grace_qaoa.gnn.loader import load_gnn_warmstart
 from grace_qaoa.controller.grace import GraceController
 from grace_qaoa.utils.budget import CountingQAOA, BudgetExhausted
-from grace_qaoa.rl.refiner import RLRefiner
 from grace_qaoa.baselines_strong import interp_baseline, fourier_baseline
 from grace_qaoa.utils.checkpoint import CheckpointStore
 
@@ -49,33 +48,28 @@ PATIENCES = [1, 2, 3, 5]
 EPSILONS = [0.0005, 0.001, 0.005, 0.01]
 
 
-def grace_ar(g, cfg, gnn, rl_model, seed, stall_eps=None, stall_patience=None):
+def grace_ar(g, cfg, gnn, seed, stall_eps=None, stall_patience=None,
+             escape=None, escape_kwargs=None):
     p = cfg["qaoa_p"]
     opt = brute_force_maxcut(g)
     cq = CountingQAOA(QAOAMaxCut(g, p=p), budget=cfg.get("quantum_budget"))
     init = gnn.predict_params(g).reshape(-1)
-    rl_step = (RLRefiner(rl_model, cq, steps_per_round=cfg.get(
-        "rl_steps_per_round", 30)) if rl_model else None)
     ctrl = GraceController(
-        cq, escape=cfg["escape"],
+        cq, escape=escape if escape is not None else cfg["escape"],
         stall_eps=stall_eps if stall_eps is not None else cfg.get("stall_eps", 1e-3),
         stall_patience=(stall_patience if stall_patience is not None
                         else cfg.get("stall_patience", 2)),
-        max_rounds=cfg["grace_rounds"], seed=seed)
+        max_rounds=cfg["grace_rounds"], seed=seed,
+        escape_kwargs=escape_kwargs or {})
     try:
-        return ctrl.run(init, rl_step_fn=rl_step)["best_cut"] / opt
+        # refiner="none" is the paper's two-stage method (GNN warm-start + escape)
+        return ctrl.run(init, refiner="none")["best_cut"] / opt
     except BudgetExhausted:
         return cq.best_cut_so_far / opt
 
 
 def load_models(args, cfg):
-    gnn = load_gnn_warmstart(args.gnn_model)
-    rl_model = None
-    if args.rl_model:
-        from stable_baselines3 import SAC, TD3
-        rl_model = {"td3": TD3, "sac": SAC}[args.rl_algo].load(
-            args.rl_model, device="cpu")
-    return gnn, rl_model
+    return load_gnn_warmstart(args.gnn_model)
 
 
 def test_graphs(cfg, n_instances, n_nodes):
@@ -88,7 +82,7 @@ def test_graphs(cfg, n_instances, n_nodes):
     return graphs
 
 
-def run_hparam(args, cfg, gnn, rl_model, store):
+def run_hparam(args, cfg, gnn, store, escape, escape_kwargs):
     graphs = test_graphs(cfg, args.n_instances, cfg["n_nodes"])
     total = len(PATIENCES) * len(EPSILONS) * len(graphs)
     for pat in PATIENCES:
@@ -97,8 +91,9 @@ def run_hparam(args, cfg, gnn, rl_model, store):
                 cid = f"pat{pat}|eps{eps}|inst{gi}"
                 if store.is_done(cid):
                     continue
-                ars = [grace_ar(g, cfg, gnn, rl_model, seed=r,
-                                stall_eps=eps, stall_patience=pat)
+                ars = [grace_ar(g, cfg, gnn, seed=r,
+                                stall_eps=eps, stall_patience=pat,
+                                escape=escape, escape_kwargs=escape_kwargs)
                        for r in range(args.n_runs)]
                 store.append(cid, {"patience": pat, "eps": eps, "instance": gi,
                                    "ar": float(np.mean(ars))})
@@ -128,7 +123,7 @@ def run_hparam(args, cfg, gnn, rl_model, store):
     print(f"Saved -> {store.run_dir / 'hparam_sensitivity.json'}")
 
 
-def run_size(args, cfg, gnn, rl_model, store):
+def run_size(args, cfg, gnn, store, escape, escape_kwargs):
     methods = ["interp", "fourier", "grace"]
     total = len(args.sizes) * args.n_instances * len(methods)
     for n_nodes in args.sizes:
@@ -140,7 +135,8 @@ def run_size(args, cfg, gnn, rl_model, store):
                 if store.is_done(cid):
                     continue
                 if m == "grace":
-                    ars = [grace_ar(g, cfg, gnn, rl_model, seed=r)
+                    ars = [grace_ar(g, cfg, gnn, seed=r,
+                                    escape=escape, escape_kwargs=escape_kwargs)
                            for r in range(args.n_runs)]
                     val = float(np.mean(ars))
                 else:
@@ -183,27 +179,43 @@ def run_size(args, cfg, gnn, rl_model, store):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["hparam", "size"], required=True)
-    ap.add_argument("--config", default="configs/hard2gnn.yml")
+    ap.add_argument("--config", default="configs/hard2gnn.yaml")
     ap.add_argument("--gnn-model", default="models/gnn_warmstart_p5_gcn.pt")
-    ap.add_argument("--rl-model", default=None)
-    ap.add_argument("--rl-algo", default="td3")
+    ap.add_argument("--escape", default=None,
+                    help="Escape operator (overrides config's 'escape'). "
+                         "Use 'aco' for the E7 size study.")
+    ap.add_argument("--tuned", default=None,
+                    help="Path to tuned_operators.json; the chosen escape's "
+                         "tuned coefficients are applied.")
     ap.add_argument("--n-instances", type=int, default=12)
     ap.add_argument("--n-runs", type=int, default=5)
     ap.add_argument("--sizes", type=int, nargs="+", default=[10, 12, 14, 16])
     ap.add_argument("--run-name", default=None)
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config))
-    gnn, rl_model = load_models(args, cfg)
+    gnn = load_models(args, cfg)
+
+    escape = args.escape or cfg["escape"]
+    escape_kwargs = {}
+    if args.tuned:
+        tuned = json.load(open(args.tuned)).get("tuned", {})
+        escape_kwargs = tuned.get(escape, {})
+        print(f"Escape operator: {escape}  tuned coefficients: {escape_kwargs}")
+    else:
+        print(f"Escape operator: {escape}  (default coefficients)")
 
     run_name = args.run_name or f"robust_{args.mode}"
     store = CheckpointStore(Path(cfg.get("out_dir", "results")) / run_name)
+    store.write_provenance(cfg=cfg, extra={"script": "robustness",
+                                           "mode": args.mode, "escape": escape,
+                                           "escape_kwargs": escape_kwargs})
     if store.n_completed:
         print(f"Resuming '{run_name}': {store.n_completed} cells done.")
 
     if args.mode == "hparam":
-        run_hparam(args, cfg, gnn, rl_model, store)
+        run_hparam(args, cfg, gnn, store, escape, escape_kwargs)
     else:
-        run_size(args, cfg, gnn, rl_model, store)
+        run_size(args, cfg, gnn, store, escape, escape_kwargs)
 
 
 if __name__ == "__main__":
