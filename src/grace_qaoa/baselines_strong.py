@@ -186,25 +186,76 @@ def spsa_baseline(cqaoa: CountingQAOA, target_p: int, iters: int = 150,
 
 
 # --------------------------------------------------------------------------- #
-# Parameter-concentration transfer                                             #
+# Parameter-concentration transfer (Galda et al. 2021; Shaydulin et al. 2023)  #
 # --------------------------------------------------------------------------- #
+def optimize_donor(donor_graph, target_p, multistart=4, maxiter=120, seed=0):
+    """Find good angles on a DONOR instance (multi-start COBYLA), returning the
+    optimized (params, mean_edge_weight). Used to build a transfer baseline the
+    way the literature does it: optimize on one instance, transfer to others.
+
+    This is a one-time, offline cost on the training split and is NOT charged to
+    the target instance's evaluation budget -- exactly as INTERP/FOURIER's
+    internal optimization is not charged across instances. Call it once per
+    (family, p) and reuse the result for every target instance of that family.
+    """
+    from grace_qaoa.quantum.qaoa import QAOAMaxCut
+    rng = np.random.default_rng(seed)
+    dq = QAOAMaxCut(donor_graph, p=target_p)
+    best_x, best_cut = None, -np.inf
+    for _ in range(multistart):
+        x0 = rng.uniform(0, np.pi, 2 * target_p)
+        res = minimize(lambda x: dq.cost(x), x0, method="COBYLA",
+                       options={"maxiter": maxiter})
+        c = dq.expected_cut(res.x)
+        if c > best_cut:
+            best_cut, best_x = c, np.asarray(res.x, dtype=float)
+    w_bar = _mean_edge_weight(donor_graph)
+    return best_x, w_bar
+
+
+def _mean_edge_weight(graph):
+    ws = [d.get("weight", 1.0) for _, _, d in graph.edges(data=True)]
+    return float(np.mean(ws)) if ws else 1.0
+
+
 def transfer_baseline(cqaoa: CountingQAOA, target_p: int,
                       donor_params: np.ndarray | None = None,
+                      donor_w_bar: float | None = None,
                       maxiter: int = 60, seed: int = 0):
-    """Initialize from donor (concentration) params, then briefly refine.
+    """Transfer optimized donor angles to the target instance, then briefly
+    refine -- the standard parameter-transfer baseline for weighted MaxCut.
 
-    If donor_params is None, use the well-known fixed-angle concentration values
-    (gamma small positive, beta moderate) as a generic donor.
+    Weight rescaling (Shaydulin et al. 2023): optimal gammas scale inversely
+    with the typical edge weight, so a donor optimized at mean weight w_bar_d is
+    transferred to a target of mean weight w_bar_t via
+        gamma_target = gamma_donor * (w_bar_d / w_bar_t).
+    Betas (mixer angles) are weight-independent and transfer unchanged. Without
+    this rescaling the transfer is systematically mis-scaled on weighted graphs,
+    which is the flaw in a naive fixed-angle transfer.
+
+    donor_params / donor_w_bar come from optimize_donor() on a TRAIN-split graph
+    of the same family (disjoint from the test instance -- no leakage). If donor
+    info is absent this raises, rather than silently falling back to a hand-set
+    ramp, so a mis-wired call is caught instead of producing a fake-weak baseline.
     """
-    rng = np.random.default_rng(seed)
     if donor_params is None:
-        g = np.linspace(0.3, 0.6, target_p)
-        b = np.linspace(0.6, 0.3, target_p)
-        x0 = np.concatenate([g, b])
-    else:
-        x0 = np.asarray(donor_params, dtype=float).reshape(-1)
+        raise ValueError(
+            "transfer_baseline now requires donor_params from optimize_donor() "
+            "on a train-split donor. Pass donor_params and donor_w_bar; do not "
+            "rely on a hand-set ramp (that was the mis-specified old behaviour).")
+
+    donor = np.asarray(donor_params, dtype=float).reshape(-1)
+    g_d, b_d = donor[:target_p], donor[target_p:]
+
+    # weight rescaling of gammas
+    w_t = _mean_edge_weight(cqaoa.qaoa.graph)
+    scale = (donor_w_bar / w_t) if (donor_w_bar and w_t) else 1.0
+    g_t = np.clip(g_d * scale, 0, np.pi)
+    b_t = np.clip(b_d, 0, np.pi)
+    x0 = np.concatenate([g_t, b_t])
+
     try:
-        x = _optimize_from(cqaoa, x0, maxiter)
+        x = _optimize_from(cqaoa, x0, maxiter)   # brief refine on the target
     except BudgetExhausted:
         x = x0
     return _finalize(cqaoa, x, target_p)

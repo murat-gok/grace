@@ -13,7 +13,7 @@
 families: [regular, erdos_renyi, watts_strogatz]
 weighted: true
 n_nodes: 14          # keep simulation tractable at p=5 on CPU
-n_instances: 8
+n_instances: 20
 n_runs: 30
 qaoa_p: 5            # HIGH depth — the crux
 
@@ -28,7 +28,7 @@ fourier_maxiter: 200
 transfer_maxiter: 100
 
 grace_rounds: 10     # more rounds => more chances for escape to trigger
-escape: cpo
+escape: aco
 stall_eps: 0.001     # min best-cut improvement to count as "progress"
 stall_patience: 2    # rounds without progress before escape fires (tuned)
 n_jobs: 8
@@ -39,3 +39,5 @@ rl_model: models/rl_refiner_td3
 rl_algo: td3
 rl_steps_per_round: 30
 gnn_model: models/gnn_warmstart_p5_gcn.pt
+tuned: models/tuned_operators.json
+refiner: none

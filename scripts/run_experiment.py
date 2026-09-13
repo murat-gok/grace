@@ -31,9 +31,10 @@ from grace_qaoa.quantum.graphs import make_dataset
 from grace_qaoa.quantum.qaoa import QAOAMaxCut, brute_force_maxcut
 from grace_qaoa.controller.grace import GraceController
 from grace_qaoa.rl.refiner import RLRefiner
-from grace_qaoa.baselines import random_init, cold_cobyla
+from grace_qaoa.baselines import random_init, cold_cobyla, random_search
 from grace_qaoa.baselines_strong import (interp_baseline, fourier_baseline,
-                                         spsa_baseline, transfer_baseline)
+                                         spsa_baseline, transfer_baseline,
+                                         optimize_donor)
 from grace_qaoa.utils.budget import CountingQAOA, BudgetExhausted
 from grace_qaoa.utils.stats import (friedman_test, average_ranks,
                                     holm_posthoc, wilcoxon_vs_baseline)
@@ -43,8 +44,8 @@ from grace_qaoa.utils.checkpoint import CheckpointStore, job_id
 # Methods compared. GRACE is the proposal; the rest are baselines, with
 # interp/fourier/spsa/transfer being the STRONG ones a Q1 reviewer expects.
 # gnn_only is the key ablation: GNN warm-start with NO refinement, NO escape.
-METHODS = ["random", "cobyla", "spsa", "interp", "fourier", "transfer",
-           "gnn_only", "grace"]
+METHODS = ["random", "random_search", "cobyla", "spsa", "interp", "fourier",
+           "transfer", "gnn_only", "grace"]
 
 
 def random_init_counting(cq, seed=0):
@@ -94,7 +95,8 @@ def _load_rl_model(cfg):
     return model
 
 
-def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
+def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None,
+                     donor=None, escape_kwargs=None):
     """Run all methods on one graph under a fair quantum-evaluation budget.
 
     Returns, per method: approximation ratio (quality) AND evals-to-target
@@ -124,6 +126,17 @@ def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
     r = random_init_counting(cq, seed=seed)
     record("random", r, cq)
 
+    # budget-matched random search -- the honest floor (best of `budget` draws)
+    cq = CountingQAOA(QAOAMaxCut(graph, p=p), budget=budget)
+    if target_cut is not None:
+        cq.set_target(target_cut)
+    rs = random_search(cq.qaoa, budget=min(budget or 3000, 3000), seed=seed)
+    # random_search evaluates on cq.qaoa directly; sync the counter for fairness
+    cq.n_evals = rs["n_quantum_evals"]
+    if rs["best_cut"] > cq.best_cut_so_far:
+        cq.best_cut_so_far = rs["best_cut"]
+    record("random_search", rs, cq)
+
     cq = CountingQAOA(QAOAMaxCut(graph, p=p), budget=budget)
     if target_cut is not None: cq.set_target(target_cut)
     r = cobyla_counting(cq, seed=seed, maxiter=cfg["cobyla_maxiter"])
@@ -134,13 +147,27 @@ def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
         ("spsa", spsa_baseline, dict(iters=cfg.get("spsa_iters", 150))),
         ("interp", interp_baseline, dict(maxiter_per_level=cfg.get("interp_maxiter", 60))),
         ("fourier", fourier_baseline, dict(maxiter=cfg.get("fourier_maxiter", 120))),
-        ("transfer", transfer_baseline, dict(maxiter=cfg.get("transfer_maxiter", 60))),
     ]:
         cq = CountingQAOA(QAOAMaxCut(graph, p=p), budget=budget)
         if target_cut is not None:
             cq.set_target(target_cut)
         r = fn(cq, target_p=p, seed=seed, **kwargs)
         record(name, r, cq)
+
+    # transfer: real donor-based parameter transfer with weight rescaling.
+    # `donor` = (donor_params, donor_w_bar) precomputed once per family on the
+    # TRAIN split (disjoint from this test instance -- no leakage).
+    cq = CountingQAOA(QAOAMaxCut(graph, p=p), budget=budget)
+    if target_cut is not None:
+        cq.set_target(target_cut)
+    if donor is not None:
+        r = transfer_baseline(cq, target_p=p, donor_params=donor[0],
+                              donor_w_bar=donor[1],
+                              maxiter=cfg.get("transfer_maxiter", 60), seed=seed)
+    else:
+        # no donor supplied: report as unavailable rather than a fake ramp
+        r = {"best_cut": cq.best_cut_so_far, "n_quantum_evals": cq.n_evals}
+    record("transfer", r, cq)
 
     # --- gnn_only ablation: GNN warm-start with no refinement/escape ---
     cq = CountingQAOA(QAOAMaxCut(graph, p=p), budget=budget)
@@ -175,7 +202,8 @@ def run_one_instance(graph, cfg, seed, rl_model=None, gnn_model=None):
     grace = GraceController(cq, escape=cfg["escape"],
                             stall_eps=cfg.get("stall_eps", 1e-3),
                             stall_patience=cfg.get("stall_patience", 2),
-                            max_rounds=cfg["grace_rounds"], seed=seed)
+                            max_rounds=cfg["grace_rounds"], seed=seed,
+                            escape_kwargs=escape_kwargs or {})
     try:
         gres = grace.run(init, rl_step_fn=rl_step_fn,
                          refiner=cfg.get("refiner", "none"))
@@ -215,6 +243,38 @@ def main():
         print(f"Loaded GNN warm-start: {cfg['gnn_model']}")
     else:
         print("No gnn_model in config -> GRACE uses random init (no warm-start).")
+
+    # --- tuned escape coefficients (optional) ---
+    escape_kwargs = {}
+    if cfg.get("tuned"):
+        tuned = json.load(open(cfg["tuned"])).get("tuned", {})
+        escape_kwargs = tuned.get(cfg["escape"], {})
+        print(f"Tuned escape '{cfg['escape']}' coefficients: {escape_kwargs}")
+
+    # --- precompute a transfer donor per family from the TRAIN split ---
+    # One optimized donor instance per family, reused for every test target of
+    # that family. Train/test seed ranges are disjoint, so this cannot leak.
+    donors = {}
+    p = cfg["qaoa_p"]
+    for family in cfg["families"]:
+        try:
+            dgraphs = make_dataset(family, n_graphs=1, n_nodes=cfg["n_nodes"],
+                                   weighted=cfg.get("weighted", False),
+                                   split="train")
+            dparams, dwbar = optimize_donor(dgraphs[0], p, multistart=4,
+                                            maxiter=cfg.get("transfer_maxiter", 120),
+                                            seed=0)
+            donors[family] = (dparams, dwbar)
+            print(f"Transfer donor for {family}: w_bar={dwbar:.3f}")
+        except TypeError:
+            # make_dataset may not accept split=; fall back to a held-out seed
+            dgraphs = make_dataset(family, n_graphs=1, n_nodes=cfg["n_nodes"],
+                                   weighted=cfg.get("weighted", False))
+            dparams, dwbar = optimize_donor(dgraphs[0], p, multistart=4,
+                                            maxiter=cfg.get("transfer_maxiter", 120),
+                                            seed=99999)
+            donors[family] = (dparams, dwbar)
+            print(f"Transfer donor for {family} (fallback seed): w_bar={dwbar:.3f}")
 
     # --- set up crash-safe checkpoint store ---
     out_dir = Path(cfg.get("out_dir", "results"))
@@ -256,7 +316,9 @@ def main():
             gen = Parallel(n_jobs=cfg["n_jobs"], verbose=5,
                            return_as="generator")(
                 delayed(run_one_instance)(g, cfg, seed=1000 * gi + run,
-                                          rl_model=rl_model, gnn_model=gnn_model)
+                                          rl_model=rl_model, gnn_model=gnn_model,
+                                          donor=donors.get(fam),
+                                          escape_kwargs=escape_kwargs)
                 for (fam, gi, run, g) in pending)
             for job, res in zip(pending, gen):
                 yield job, res
@@ -267,7 +329,9 @@ def main():
                 chunk = pending[s:s + bs]
                 out = Parallel(n_jobs=cfg["n_jobs"], verbose=5)(
                     delayed(run_one_instance)(g, cfg, seed=1000 * gi + run,
-                                              rl_model=rl_model, gnn_model=gnn_model)
+                                              rl_model=rl_model, gnn_model=gnn_model,
+                                              donor=donors.get(fam),
+                                              escape_kwargs=escape_kwargs)
                     for (fam, gi, run, g) in chunk)
                 for job, res in zip(chunk, out):
                     yield job, res
