@@ -49,10 +49,20 @@ def _atomic_torch_save(obj, path: Path) -> None:
     os.replace(tmp, path)
 
 
-def compute_targets(graphs, p, multistart=8, maxiter=120, seed=0):
-    """Find good (gamma, beta) for each graph via multi-start COBYLA."""
+def compute_targets(graphs, p, multistart=8, maxiter=None, seed=0):
+    """Find good (gamma, beta) for each graph via multi-start COBYLA.
+
+    maxiter scales with the search-space dimension (2p): a fixed budget that is
+    ample at p=3 (6 dims) under-optimizes at p=8 (16 dims), producing weak
+    targets and hence a weak warm-start. If maxiter is None we scale it as
+    60 * 2p (p=5 -> 600, p=8 -> 960), giving every depth a comparable
+    per-dimension optimization budget.
+    """
+    if maxiter is None:
+        maxiter = 60 * (2 * p)
     rng = np.random.default_rng(seed)
     targets = []
+    print(f"  target COBYLA maxiter = {maxiter} (scaled to 2p={2*p} dims)")
     for gi, g in enumerate(graphs):
         qaoa = QAOAMaxCut(g, p=p)
         best_x, best_cut = None, -np.inf
@@ -159,10 +169,24 @@ def main():
     ap.add_argument("--out", default="models")
     ap.add_argument("--cache", default=None,
                     help="Path to cache targets; reused if present (crash-safe).")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Seed for GNN weight init (torch/numpy). Different "
+                         "seeds give different trained models -- used by the "
+                         "warm-start seed-variance study (E8). When set, the "
+                         "saved model name includes _s<seed> so seeds don't "
+                         "overwrite each other.")
+    ap.add_argument("--qaoa-p", type=int, default=None,
+                    help="Override the config's qaoa_p (for depth sweeps).")
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config))
-    p = cfg["qaoa_p"]
+    p = args.qaoa_p if args.qaoa_p is not None else cfg["qaoa_p"]
     weighted = cfg.get("weighted", False)
+
+    # Reproducible model init when a seed is given (targets are seed-independent).
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+    seed_tag = f"_s{args.seed}" if args.seed is not None else ""
 
     # --- build training pool ---
     graphs = []
@@ -206,7 +230,7 @@ def main():
     # from the last saved epoch instead of restarting from scratch.
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = out_dir / f"train_ckpt_p{p}_{args.conv}.pt"
+    ckpt_path = out_dir / f"train_ckpt_p{p}_{args.conv}{seed_tag}.pt"
     start_epoch = 0
     if ckpt_path.exists():
         try:
@@ -263,11 +287,11 @@ def main():
     # MSE to optimal angles is a proxy; what we actually want is high expected
     # cut from the predicted angles. We fine-tune directly on a differentiable
     # surrogate: maximize predicted-angle cut via a PennyLane torch interface.
-    model_path = out_dir / f"gnn_warmstart_p{p}_{args.conv}.pt"
+    model_path = out_dir / f"gnn_warmstart_p{p}_{args.conv}{seed_tag}.pt"
     if args.finetune_epochs > 0:
         print(f"Fine-tuning {args.finetune_epochs} epochs on cut objective...")
         _finetune_on_cut(model, graphs, targets, p, args.finetune_epochs,
-                         ckpt_path=out_dir / f"ft_ckpt_p{p}_{args.conv}.pt",
+                         ckpt_path=out_dir / f"ft_ckpt_p{p}_{args.conv}{seed_tag}.pt",
                          ckpt_every=args.ckpt_every)
         q2 = warmstart_quality()
         if q2 is not None:
@@ -278,7 +302,7 @@ def main():
     print(f"Saved GNN warm-start -> {model_path}")
     # Training finished cleanly: remove the resume checkpoints so a later,
     # intentional rerun starts fresh rather than resuming a completed run.
-    for stale in (ckpt_path, out_dir / f"ft_ckpt_p{p}_{args.conv}.pt"):
+    for stale in (ckpt_path, out_dir / f"ft_ckpt_p{p}_{args.conv}{seed_tag}.pt"):
         try:
             stale.unlink()
         except FileNotFoundError:
