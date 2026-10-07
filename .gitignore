@@ -1,15 +1,26 @@
-﻿.venv/
+.venv/
 __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
 .ipynb_checkpoints/
 
-# Trained artifacts (48 MB) - archived to Zenodo, not git
-models/
-*.pt
-*.zip
+# training scratch and the unused RL model (NOT the released GNNs)
+models/train_ckpt_*.pt
+models/ft_ckpt_*.pt
+models/*.tmp
+models/rl_refiner_td3*
 
-# Local scratch
+# experiment outputs are regenerable
+results/
+
+# local scratch
+*.bak.*
 *.tar.gz
 FROZEN_COMMIT.txt
+configs/probe_*.yaml
+configs/cmp_*.yaml
+configs/diag_*.yaml
+configs/e8_s*.yaml
+configs/exp_*.yaml
+models/ckpt_td3/

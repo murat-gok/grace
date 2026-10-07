@@ -1,22 +1,22 @@
-# Alternative to environment.yml if you prefer plain venv + pip.
-# Office Xeon, CPU-only. Create with:  python -m venv .venv && source .venv/bin/activate
-# Then:  pip install -r requirements.txt
-#   plus separately:  pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
+# Core numerics and optimization
+numpy>=1.24
+scipy>=1.10
+pyyaml>=6.0
+joblib>=1.3          # parallel runs + return_as="generator" for per-job checkpointing
 
-numpy<2.0
-scipy
-pandas
-networkx
-matplotlib
-scikit-learn
-joblib
-tqdm
-pyyaml
-pytest
-pennylane==0.38.0
-autoray==0.6.12
-pennylane-lightning==0.38.0
-torch-geometric==2.5.3
-gymnasium==0.29.1
-stable-baselines3==2.3.2
-tensorboard
+# QAOA simulation
+pennylane>=0.33      # differentiable QAOA expectation for GNN fine-tuning
+
+# GNN warm-start
+torch>=2.0
+torch-geometric>=2.4
+
+# Graph generation
+networkx>=3.0
+
+# Figures
+matplotlib>=3.7
+
+# Optional: only needed to RETRAIN or re-evaluate the (removed) RL refiner.
+# Grace itself runs with refiner=none and does not import this.
+# stable-baselines3>=2.0

@@ -41,18 +41,43 @@ def test_target_tracking():
 def test_strong_baselines_run_and_count():
     g = make_dataset("regular", n_graphs=1, n_nodes=8, seed=2)[0]
     opt = brute_force_maxcut(g)
-    for fn in (interp_baseline, fourier_baseline, spsa_baseline, transfer_baseline):
+    # transfer needs a donor; the other three do not.
+    for fn in (interp_baseline, fourier_baseline, spsa_baseline):
         cq = CountingQAOA(QAOAMaxCut(g, p=2))
         res = fn(cq, target_p=2, seed=0)
         assert 0.0 <= res["best_cut"] / opt <= 1.0 + 1e-6
         assert res["n_quantum_evals"] > 0
+    from grace_qaoa.baselines_strong import optimize_donor
+    donor = _donor_graph()
+    dparams, dwbar = optimize_donor(donor, target_p=2, multistart=2, maxiter=40)
+    cq = CountingQAOA(QAOAMaxCut(g, p=2))
+    res = transfer_baseline(cq, target_p=2, donor_params=dparams,
+                            donor_w_bar=dwbar, seed=0)
+    assert 0.0 <= res["best_cut"] / opt <= 1.0 + 1e-6
+    assert res["n_quantum_evals"] > 0
 
 
 def test_strong_baselines_respect_budget():
     g = make_dataset("regular", n_graphs=1, n_nodes=8, seed=2)[0]
     budget = 60
-    for fn in (interp_baseline, fourier_baseline, spsa_baseline, transfer_baseline):
+    for fn in (interp_baseline, fourier_baseline, spsa_baseline):
         cq = CountingQAOA(QAOAMaxCut(g, p=2), budget=budget)
         res = fn(cq, target_p=2, seed=0)
-        # allow a tiny overshoot of a couple evals from the final scoring call
         assert res["n_quantum_evals"] <= budget + 3
+    from grace_qaoa.baselines_strong import optimize_donor
+    donor = _donor_graph()
+    dparams, dwbar = optimize_donor(donor, target_p=2, multistart=2, maxiter=40)
+    cq = CountingQAOA(QAOAMaxCut(g, p=2), budget=budget)
+    res = transfer_baseline(cq, target_p=2, donor_params=dparams,
+                            donor_w_bar=dwbar, seed=0)
+    assert res["n_quantum_evals"] <= budget + 3
+
+
+def _donor_graph():
+    """A donor instance disjoint from the test graph. Tries the train split;
+    falls back to a distinct seed if make_dataset has no split argument."""
+    try:
+        return make_dataset("regular", n_graphs=1, n_nodes=8, seed=2,
+                            split="train")[0]
+    except TypeError:
+        return make_dataset("regular", n_graphs=1, n_nodes=8, seed=99999)[0]
